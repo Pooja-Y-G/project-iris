@@ -1,92 +1,56 @@
-# Project IRIS — Canonical PostGIS Pilot Schema
+# Project IRIS - PostGIS Pilot Schema
 
-A minimal, reproducible PostgreSQL/PostGIS implementation for the Project IRIS pilot.
+This project contains a small PostgreSQL/PostGIS schema for the Project IRIS pilot.
 
-The project models country-aware geospatial entities used for preliminary parcel screening, including parcels, substations, peatlands, screening layers, source metadata, and supporting evidence.
+It stores parcels, substations, peatlands, screening layers, source information and evidence for basic spatial screening.
 
-## Technology
+## Tech Stack
 
 - PostgreSQL 16
 - PostGIS 3.4
+- Docker
 - SQL
-- Docker / Docker Compose
-- PowerShell for local orchestration
+- PowerShell
 
 ## Project Structure
 
 ```text
-project-iris/
-├── migrations/
-│   ├── 001_extensions.sql
-│   ├── 002_schemas.sql
-│   ├── 003_source_run.sql
-│   ├── 004_core_tables.sql
-│   ├── 005_evidence.sql
-│   └── 006_indexes.sql
-├── seeds/
-│   └── seed.sql
-├── verification/
-│   └── verify.sql
-├── tests/
-│   └── test_schema.sql
-├── docs/
-│   └── schema.md
-├── compose.yaml
-├── init-db.ps1
-├── reset-db.ps1
-└── README.md
+migrations/      SQL migrations
+seeds/           Sample test data
+verification/    Spatial verification queries
+tests/           SQL tests
+docs/            Schema diagram
+compose.yaml     PostgreSQL/PostGIS container
+init-db.ps1      Initialize the database
+reset-db.ps1     Rebuild the database
 ```
 
-## Quick Start
+## Setup
 
-### Prerequisites
+Docker and PowerShell are required.
 
-The implementation requires:
-
-- Docker
-- Docker Compose
-- PowerShell
-
-No local PostgreSQL or PostGIS installation is required.
-
-### Start and initialize
+Start and initialize the database:
 
 ```powershell
 .\init-db.ps1
 ```
 
-This command:
-
-1. Starts PostgreSQL/PostGIS.
-2. Waits for the database health check.
-3. Applies SQL migrations in order.
-4. Loads deterministic fixtures.
-5. Runs automated schema tests.
-6. Runs verification queries.
-
-### Reset and rebuild
-
-To destroy the local database and rebuild it completely from the repository:
+To delete the current database and rebuild everything:
 
 ```powershell
 .\reset-db.ps1
 ```
 
-This provides a reproducible clean-database test without manual database configuration.
+The scripts run the migrations, load the sample data and run the tests and verification queries.
 
-## Schemas
+## Database Schemas
 
-Two PostgreSQL schemas are created:
+The project uses two schemas:
 
-### `iris_staging`
+- `iris_staging` - reserved for raw/source data before it is moved into the core schema.
+- `iris_core` - contains the main pilot tables.
 
-Reserved as the ingestion boundary for source-specific/raw data before controlled promotion into the canonical model.
-
-The pilot deliberately does not introduce source-specific staging tables because no external production dataset is required for this assignment.
-
-### `iris_core`
-
-Contains the canonical pilot entities:
+Core tables:
 
 - `parcel`
 - `substation`
@@ -95,80 +59,48 @@ Contains the canonical pilot entities:
 - `source_run`
 - `evidence`
 
-## Canonical Naming
+## Country-Aware Keys
 
-The implementation uses the requested canonical names where applicable:
+`country_code` is required for all core entities.
 
-- `geom`
-- `country_code`
-- `region_code`
-- `source_id`
-- `source_date`
-- `created_at`
-
-The name `geometry` is intentionally not used as a core geometry column.
-
-## Country-Aware Design
-
-Every persisted core entity contains a non-null `country_code`.
-
-Source identifiers are unique within their country scope using composite constraints such as:
+Source identifiers are unique within a country using:
 
 ```text
 (country_code, source_id)
 ```
 
-The evidence-to-parcel relationship is also country-scoped:
+The relationship between evidence and parcel also includes `country_code` so that records cannot be linked across countries.
 
-```text
-evidence(country_code, parcel_id)
-        →
-parcel(country_code, id)
-```
+## Geometry and CRS
 
-This prevents relationships from silently crossing country boundaries.
+The project uses the canonical column name `geom`.
 
-## Geometry and CRS Policy
+Geometry types:
 
-Canonical spatial data is stored using EPSG:4326 (WGS 84).
-
-Geometry contracts:
-
-| Entity | Geometry |
+| Table | Geometry |
 |---|---|
-| parcel | MultiPolygon, SRID 4326 |
-| substation | Point, SRID 4326 |
-| peatland | MultiPolygon, SRID 4326 |
-| screening_layer | MultiPolygon, SRID 4326 |
+| parcel | MultiPolygon |
+| substation | Point |
+| peatland | MultiPolygon |
+| screening_layer | MultiPolygon |
 
-EPSG:4326 is used as the canonical interchange/storage CRS for this pilot.
+All geometries are stored using EPSG:4326 (WGS 84).
 
-For operations requiring metric distances, the verification queries cast geometry to PostGIS `geography`, so distances are evaluated in metres rather than treating longitude/latitude degrees as metric units.
+For distance queries, the geometry is converted to PostGIS `geography` so the distance can be calculated in metres.
 
-For a larger production workload, country-specific projected coordinate systems or additional derived/indexed representations should be evaluated based on the spatial operations and target regions.
+## Indexes
 
-## Indexing
+GiST indexes are added to the geometry columns.
 
-Spatial entities use GiST indexes on `geom`.
+Additional indexes are included for common country/region filtering and the evidence-to-parcel relationship.
 
-Relational/filter indexes are provided for frequently used country and region filters.
+## Sample Data
 
-Evidence also has an index supporting its parcel relationship.
+`seeds/seed.sql` contains a small synthetic dataset for testing.
 
-## Deterministic Fixtures
+The sample parcel and peatland intentionally overlap so that `ST_Intersects` can be tested.
 
-`seeds/seed.sql` provides a small synthetic fixture set containing:
-
-- one parcel
-- one substation
-- one peatland
-- one screening layer
-- source-run metadata
-- one evidence record
-
-The parcel and peatland deliberately overlap so that spatial intersection behaviour can be verified.
-
-Fixture geometries are synthetic and must not be interpreted as real parcel, environmental, planning, ownership, or grid data.
+The sample data is only for development and does not represent real parcels or environmental data.
 
 ## Verification
 
@@ -179,19 +111,16 @@ Get-Content .\verification\verify.sql |
     docker compose exec -T db psql -U iris -d iris
 ```
 
-Verification demonstrates:
+The queries check:
 
-- geometry type
-- SRID
+- geometry type and SRID
 - geometry validity
 - parcel/peatland intersection
-- nearby-substation lookup
+- nearby substation distance
 - evidence relationship
-- spatial query planning/index availability
+- spatial query plan
 
-Because the fixture dataset is intentionally tiny, PostgreSQL may choose a sequential scan instead of a GiST index when that is cheaper. The index itself is part of the schema contract and can be inspected with PostgreSQL query planning tools.
-
-## Automated Tests
+## Tests
 
 Run:
 
@@ -200,47 +129,22 @@ Get-Content .\tests\test_schema.sql |
     docker compose exec -T db psql -v ON_ERROR_STOP=1 -U iris -d iris
 ```
 
-The tests fail immediately when critical schema contracts are violated.
+The tests check the main schema requirements such as required tables, `country_code`, geometry columns and the sample spatial intersection.
 
-They currently verify:
+## Assumptions
 
-- required schemas
-- required core entities
-- non-null `country_code`
-- canonical `geom` columns
-- expected spatial intersection behaviour
+This is a small pilot implementation, so I kept the design simple.
 
-## Assumptions and Deliberate Simplifications
+The staging schema does not contain source-specific tables because no external dataset is used in this assignment.
 
-This submission implements the minimum reproducible pilot contract rather than a production ingestion platform.
+The sample data is synthetic and EPSG:4326 is used as the common storage CRS. For a production system, the staging model, source metadata and CRS strategy could be extended depending on the real data sources and countries.
 
-Deliberate simplifications include:
-
-- synthetic fixtures instead of proprietary or paid data
-- no production credentials or external APIs
-- no source-specific staging adapters
-- one canonical storage CRS
-- a generalized `screening_layer` entity
-- minimal source-run metadata
-
-The schema can evolve by adding source-specific staging adapters, richer provenance, additional screening categories, projected CRS strategies, and more detailed evidence models without changing the basic canonical naming conventions.
-
-## Screening Interpretation
-
-Spatial results produced by this pilot are preliminary and indicative.
-
-An intersection or proximity result is evidence for further investigation, not proof of development suitability.
-
-Ownership, planning status, grid capacity, environmental eligibility, transferability, permitting, and project readiness require independent verification.
-
-The schema does not represent a permit, grid reservation, ownership confirmation, or development-readiness decision.
+Spatial screening results should be treated as preliminary. They do not confirm ownership, planning permission, grid capacity, environmental eligibility or project readiness.
 
 ## Schema Diagram
 
-See:
+The Mermaid schema diagram is available in:
 
 ```text
 docs/schema.md
 ```
-
-for the Mermaid entity relationship diagram.
